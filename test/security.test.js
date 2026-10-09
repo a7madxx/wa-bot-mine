@@ -18,6 +18,7 @@ const {
   isWithheldViewOnceMessage,
   isViewOnceViewedUpdate,
   normalizePairingPhoneNumber,
+  shouldRequestPhonePairing,
   streamToLimitedBuffer,
   unwrapViewOnce
 } = require('../index')
@@ -27,6 +28,21 @@ test('accepts only an international phone number made of digits', () => {
   assert.throws(() => normalizePairingPhoneNumber('+201234567890'), /only 7 to 15 digits/)
   assert.throws(() => normalizePairingPhoneNumber('0123-456-789'), /only 7 to 15 digits/)
   assert.throws(() => normalizePairingPhoneNumber('123'), /only 7 to 15 digits/)
+})
+
+test('requests phone pairing once only after the socket emits a QR', () => {
+  const ready = {
+    enabled: true,
+    registered: false,
+    qr: 'qr-ready',
+    requested: false
+  }
+
+  assert.equal(shouldRequestPhonePairing(ready), true)
+  assert.equal(shouldRequestPhonePairing({ ...ready, qr: undefined }), false)
+  assert.equal(shouldRequestPhonePairing({ ...ready, requested: true }), false)
+  assert.equal(shouldRequestPhonePairing({ ...ready, registered: true }), false)
+  assert.equal(shouldRequestPhonePairing({ ...ready, enabled: false }), false)
 })
 
 test('fetches the current WhatsApp Web version for the socket handshake', async () => {

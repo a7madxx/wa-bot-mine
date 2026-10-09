@@ -96,7 +96,7 @@ function formatPairingCode(value) {
   return String(value).match(/.{1,4}/g)?.join('-') || String(value)
 }
 
-async function requestPhonePairing(sock) {
+async function promptForPairingPhoneNumber() {
   const terminal = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -106,15 +106,22 @@ async function requestPhonePairing(sock) {
     const answer = await terminal.question(
       'Enter your WhatsApp number with country code, digits only (example: 201234567890): '
     )
-    const phoneNumber = normalizePairingPhoneNumber(answer)
-    const code = await sock.requestPairingCode(phoneNumber)
-
-    log('Generated a phone-number pairing code')
-    console.log(`Pairing code: ${formatPairingCode(code)}`)
-    console.log('In WhatsApp, open Linked Devices > Link a Device > Link with phone number instead.')
+    return normalizePairingPhoneNumber(answer)
   } finally {
     terminal.close()
   }
+}
+
+function shouldRequestPhonePairing({ enabled, registered, qr, requested }) {
+  return Boolean(enabled && !registered && qr && !requested)
+}
+
+async function requestPhonePairing(sock, phoneNumber) {
+  const code = await sock.requestPairingCode(phoneNumber)
+
+  log('Generated a phone-number pairing code')
+  console.log(`Pairing code: ${formatPairingCode(code)}`)
+  console.log('In WhatsApp, open Linked Devices > Link a Device > Link with phone number instead.')
 }
 
 function getDisconnectReasonName(statusCode) {
@@ -611,6 +618,11 @@ async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
   await secureAuthDirectory()
 
+  const pairingPhoneNumber = USE_PHONE_PAIRING && !state.creds.registered
+    ? await promptForPairingPhoneNumber()
+    : undefined
+  let pairingCodeRequested = false
+
   const versionResult = await getWhatsAppWebVersion()
   const version = versionResult.version
   if (versionResult.isLatest) {
@@ -644,7 +656,18 @@ async function startBot() {
     if (qr) {
       qrSeenSinceLastOpen = true
       preOpenHandshakeRetries = 0
-      if (!USE_PHONE_PAIRING) {
+
+      if (shouldRequestPhonePairing({
+        enabled: USE_PHONE_PAIRING,
+        registered: state.creds.registered,
+        qr,
+        requested: pairingCodeRequested
+      })) {
+        pairingCodeRequested = true
+        void requestPhonePairing(sock, pairingPhoneNumber).catch(error => {
+          log(`Phone-number pairing failed: ${error.message}`)
+        })
+      } else if (!USE_PHONE_PAIRING) {
         log('Scan this QR only from your own WhatsApp Linked Devices screen')
         qrcode.generate(qr, { small: true })
       }
@@ -688,10 +711,6 @@ async function startBot() {
       }
     }
   })
-
-  if (!state.creds.registered && USE_PHONE_PAIRING) {
-    await requestPhonePairing(sock)
-  }
 
   sock.ev.on('messaging-history.set', ({ messages }) => {
     let cachedCount = 0
@@ -816,6 +835,7 @@ module.exports = {
   isWithheldViewOnceMessage,
   isViewOnceViewedUpdate,
   normalizePairingPhoneNumber,
+  shouldRequestPhonePairing,
   streamToLimitedBuffer,
   unwrapViewOnce
 }
